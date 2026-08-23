@@ -1,0 +1,23 @@
+The ACCDE issue is likely a compilation error somewhere in your VBA — Access won't compile to ACCDE if there are any unresolved references or syntax errors. We can fix that separately.
+
+For the navigation bar problem right now, add this to frmMain Form_Load and Form_Activate:
+
+vb
+Private Sub Form_Load()
+    DoCmd.NavigateTo "acNavigationCategoryObjectType"
+    DoCmd.RunCommand acCmdWindowHide
+    Application.Caption = "Macro Mega"
+    CommandBars("Navigation Pane").Enabled = False
+End Sub
+
+Private Sub Form_Activate()
+    CommandBars("Navigation Pane").Enabled = False
+End Sub
+
+And add this to modGlobals in your startup sub, before frmMain opens:
+
+vb
+DoCmd.ShowToolbar "Ribbon", acToolbarNo
+CommandBars("Navigation Pane").Enabled = False
+
+For the ACCDE issue — in the VBA editor go to Debug → Compile Database. It will stop at the first error and highlight it. Tell me what error it shows and we'll fix it, then try making the ACCDE again. A successful compile is the only thing blocking you from locking the whole thing down properly.
