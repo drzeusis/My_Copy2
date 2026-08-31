@@ -1,0 +1,169 @@
+Option Compare Database
+Option Explicit
+
+Private savedSelTop     As Long
+Private savedSelHeight  As Long
+Private selectedStudyID As Long
+
+Private Sub Form_Load()
+    savedSelTop = 0
+    savedSelHeight = 0
+    selectedStudyID = 0
+    InitTechFilter
+    RefreshFromTechFilter
+End Sub
+
+Private Sub InitTechFilter()
+    Me.lstTechFilter.Requery
+    Dim i As Long
+    For i = 0 To Me.lstTechFilter.ListCount - 1
+        Me.lstTechFilter.Selected(i) = (Me.lstTechFilter.ItemData(i) = gCurrentTechID)
+    Next i
+End Sub
+
+Private Sub lstTechFilter_Click()
+    RefreshFromTechFilter
+End Sub
+
+Public Sub RefreshFromTechFilter()
+    Dim checkedIDs As String
+    checkedIDs = GetCheckedTechIDs()
+
+    Me.subStudyFilterList.Form.RecordSource = _
+        "SELECT 0 AS StudyID, '-- Show All --' AS DisplayText, 0 AS SortTier, 'Complete' AS StudyInfo " & _
+        "FROM tblStudies WHERE StudyID = (SELECT MIN(StudyID) FROM tblStudies) " & _
+        "UNION ALL " & _
+        "SELECT StudyID, Nz(StudyNumber,'') & ' | ' & Nz(Matrix,'') AS DisplayText, " & _
+        "IIf(SponsorProtocol='NO RECORD', 1, 2) AS SortTier, " & _
+        "IIf(Len(Trim(Nz(StudyNumber,''))) > 0 " & _
+        "And Len(Trim(Nz(Matrix,''))) > 0 " & _
+        "And Len(Trim(Nz(MonitorEmail,''))) > 0 " & _
+        "And Len(Trim(Nz(ScientistEmail,''))) > 0 " & _
+        "And Len(Trim(Nz(StudyDirectorEmail,''))) > 0, " & _
+        "'Complete', 'Missing') AS StudyInfo " & _
+        "FROM tblStudies " & _
+        "WHERE (SponsorProtocol='NO RECORD' AND Tech1ID Is Null) " & _
+        "OR (Tech1ID In (" & checkedIDs & ")) " & _
+        "ORDER BY SortTier, DisplayText"
+    Me.subStudyFilterList.Form.Requery
+
+    selectedStudyID = 0
+    RefreshTable3
+End Sub
+
+Public Sub StudySelectionChanged(studyID As Long)
+    selectedStudyID = studyID
+    RefreshTable3
+End Sub
+
+Private Sub RefreshTable3()
+    Dim checkedIDs As String
+    checkedIDs = GetCheckedTechIDs()
+
+    Dim sql As String
+    sql = "SELECT sh.ShipmentID, sh.SR, st.StudyNumber, sh.Waybill, sh.Samples, sh.Boxes, " & _
+          "sh.Condition, sh.SplitType, st.StorageTemp, st.StudyID, " & _
+          "IIf(Len(Trim(Nz(st.StudyNumber,''))) > 0 " & _
+          "And Len(Trim(Nz(st.Matrix,''))) > 0 " & _
+          "And Len(Trim(Nz(st.MonitorEmail,''))) > 0 " & _
+          "And Len(Trim(Nz(st.ScientistEmail,''))) > 0 " & _
+          "And Len(Trim(Nz(st.StudyDirectorEmail,''))) > 0, " & _
+          "'Complete', 'Missing') AS StudyInfo " & _
+          "FROM tblShipments sh INNER JOIN tblStudies st ON sh.StudyID = st.StudyID " & _
+          "WHERE ((st.SponsorProtocol='NO RECORD' AND st.Tech1ID Is Null) OR st.Tech1ID In (" & checkedIDs & ")) " & _
+          "AND sh.WatsonLogged = False "
+
+    If selectedStudyID <> 0 Then
+        sql = sql & "AND st.StudyID = " & selectedStudyID & " "
+    End If
+    sql = sql & "ORDER BY sh.DeliveryDate DESC"
+
+    Me.subExternalShipmentsList.Form.RecordSource = sql
+    Me.subExternalShipmentsList.Form.Requery
+End Sub
+
+Private Function GetCheckedTechIDs() As String
+    Dim ids As String
+    Dim i As Long
+    For i = 0 To Me.lstTechFilter.ListCount - 1
+        If Me.lstTechFilter.Selected(i) Then
+            If ids <> "" Then ids = ids & ","
+            ids = ids & Me.lstTechFilter.ItemData(i)
+        End If
+    Next i
+    If ids = "" Then ids = "0"
+    GetCheckedTechIDs = ids
+End Function
+
+Public Sub CaptureSelection(selTop As Long, selHeight As Long)
+    savedSelTop    = selTop
+    savedSelHeight = selHeight
+End Sub
+
+Private Sub cmdRefresh_Click()
+    RefreshFromTechFilter
+End Sub
+
+Private Sub cmdEditStudy_Click()
+    If selectedStudyID = 0 Then
+        MsgBox "Please select a specific study first.", vbExclamation
+        Exit Sub
+    End If
+    DoCmd.OpenForm "frmEditStudyQuick", , , , , acDialog, selectedStudyID
+    RefreshFromTechFilter
+End Sub
+
+Private Sub cmdWatsonLog_Click()
+    Dim ids() As Long
+    Dim count As Long
+    GetSelectedIDs ids, count
+    If count = 0 Then
+        MsgBox "Please select at least one shipment.", vbExclamation
+        Exit Sub
+    End If
+    If MsgBox("Mark " & count & " shipment(s) as Watson Logged?", _
+              vbYesNo + vbQuestion, "Confirm") = vbNo Then Exit Sub
+
+    Dim db As DAO.Database
+    Set db = CurrentDb()
+    Dim i As Long
+    For i = 0 To count - 1
+        db.Execute "UPDATE tblShipments SET WatsonLogged = True WHERE ShipmentID = " & ids(i), dbFailOnError
+        WriteLog "Watson Log", "fsubExternalShipments", "ShipmentID: " & ids(i)
+    Next i
+    RefreshTable3
+End Sub
+
+Private Sub cmdSendEmail_Click()
+    Dim ids() As Long
+    Dim count As Long
+    GetSelectedIDs ids, count
+    If count = 0 Then
+        MsgBox "Please select at least one shipment.", vbExclamation
+        Exit Sub
+    End If
+    SendConfirmationEmail ids, count, False
+End Sub
+
+Private Sub GetSelectedIDs(ByRef ids() As Long, ByRef count As Long)
+    count = 0
+    ReDim ids(0)
+    If savedSelTop = 0 Or savedSelHeight = 0 Then Exit Sub
+    Dim frm As Form
+    Set frm = Me.subExternalShipmentsList.Form
+    Dim rs As DAO.Recordset
+    Set rs = frm.RecordsetClone
+    If rs.BOF And rs.EOF Then rs.Close: Exit Sub
+    rs.MoveFirst
+    Do While Not rs.EOF
+        Dim rowNum As Long
+        rowNum = rs.AbsolutePosition + 1
+        If rowNum >= savedSelTop And rowNum <= savedSelTop + savedSelHeight - 1 Then
+            ReDim Preserve ids(count)
+            ids(count) = rs!ShipmentID
+            count = count + 1
+        End If
+        rs.MoveNext
+    Loop
+    rs.Close
+End Sub
