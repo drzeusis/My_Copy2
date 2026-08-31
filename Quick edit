@@ -1,0 +1,50 @@
+Step 1 — Build frmEditStudyQuick
+
+Form properties: Pop Up=Yes, Modal=Yes, Border Style=Dialog, Record Selectors=No, Navigation Buttons=No.
+
+Controls:
+
+Control	Type	Source	Notes
+lblTitle	Label	(unbound)	Bold, larger font
+lblSubtitle	Label	(unbound)	Smaller/gray font, below title
+cboStorageTemp	Combo Box	StorageTemp	Row Source Type=Value List, Row Source=-80;-20, Limit To List=Yes
+txtMonitorEmail	Text Box	MonitorEmail	
+txtScientistEmail	Text Box	ScientistEmail	
+txtStudyDirectorEmail	Text Box	StudyDirectorEmail	
+txtCC	Text Box	CC	
+cmdSave	Button	Caption: Save	
+cmdCancel	Button	Caption: Cancel	
+
+Add labels above each field: Storage Temp, Monitor Email, Scientist Email, Study Director Email, CC.
+
+Step 2 — VBA
+vb
+Option Compare Database
+Option Explicit
+
+Private Sub Form_Load()
+    Dim studyID As Long
+    studyID = CLng(Me.OpenArgs)
+    Me.RecordSource = "SELECT * FROM tblStudies WHERE StudyID=" & studyID
+
+    Me.lblTitle.Caption    = "Study " & Nz(Me!StudyNumber, "") & " Quick Edit"
+    Me.lblSubtitle.Caption = Nz(Me!SponsorProtocol, "")
+End Sub
+
+Private Sub cmdSave_Click()
+    If Me.Dirty Then Me.Dirty = False
+    WriteLog "Quick Edit Study", "frmEditStudyQuick", "StudyID: " & Me!StudyID
+    DoCmd.Close acForm, Me.Name
+End Sub
+
+Private Sub cmdCancel_Click()
+    If Me.Dirty Then Me.Undo
+    DoCmd.Close acForm, Me.Name
+End Sub
+
+Private Sub cboStorageTemp_NotInList(NewData As String, Response As Integer)
+    MsgBox "'" & NewData & "' is not a valid option. Please choose -80 or -20.", vbExclamation
+    Response = acDataErrContinue
+End Sub
+
+No changes needed anywhere else — cmdEditStudy_Click in fsubExternalShipments already opens this form passing selectedStudyID via OpenArgs and calls RefreshFromTechFilter on return, so Table 2/3 will immediately reflect any Storage Temp/email changes made here.
