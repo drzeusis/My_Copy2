@@ -1,0 +1,135 @@
+Step 1 — Controls on frmEditStudyQuick
+Control	Type	Source	Notes
+lblTitle	Label	(unbound)	
+lblSubtitle	Label	(unbound)	
+txtStudyNumber	Text Box	StudyNumber	
+txtSponsorProtocol	Text Box	SponsorProtocol	
+txtClientProtocol	Text Box	ClientProtocol	
+cboClientID	Combo Box	ClientID	SELECT ClientID,ClientName FROM tblClients ORDER BY ClientName
+cmdAddClient	Button		Caption +
+cboSpeciesID	Combo Box	SpeciesID	SELECT SpeciesID,Species FROM tblSpecies ORDER BY Species
+cboStudyTypeID	Combo Box	StudyTypeID	SELECT StudyTypeID,StudyType FROM tblStudyTypes ORDER BY StudyType
+txtMatrix	Text Box	Matrix	
+cboStorageTemp	Combo Box	StorageTemp	Row Source: -80;-20;Other, Limit To List=Yes
+cboTech1ID	Combo Box	Tech1ID	SELECT TechID,TechName FROM tblTechs ORDER BY TechName
+cboTech2ID	Combo Box	Tech2ID	same
+cboTempFreezerID	Combo Box	TempFreezerID	SELECT FreezerID,FreezerName FROM tblFreezer ORDER BY FreezerName, Bound Col=1, Col Count=2, Col Widths=0cm;4cm
+cboFreezerID	Combo Box	FreezerID	same as above
+txtStudyDirector	Text Box	StudyDirector	
+txtStudyDirectorEmail	Text Box	StudyDirectorEmail	
+txtScientist	Text Box	Scientist	
+txtScientistEmail	Text Box	ScientistEmail	
+txtMonitorName	Text Box	MonitorName	
+txtMonitorEmail	Text Box	MonitorEmail	
+txtCC	Text Box	CC	
+txtComments	Text Box	Comments	Enter Key Behavior=New Line in Field, Scroll Bars=Vertical
+cmdSave	Button		Caption Save
+cmdCancel	Button		Caption Cancel
+
+Form properties unchanged: Pop Up=Yes, Modal=Yes, Border Style=Dialog.
+
+Step 2 — Full VBA (replace the entire module)
+vb
+Option Compare Database
+Option Explicit
+
+Private Const DEFAULT_CC As String = "mtl-watson@crl.com"
+
+Private Sub Form_Load()
+    If IsNull(Me.OpenArgs) Or Me.OpenArgs = "" Or Me.OpenArgs = "NEW" Then
+        Me.RecordSource = "tblStudies"
+        Me.AllowAdditions = True
+        DoCmd.GoToRecord , , acNewRec
+        Me.txtCC.Value = DEFAULT_CC
+        Me.lblTitle.Caption = "Add New Study"
+        Me.lblSubtitle.Caption = ""
+    Else
+        Dim studyID As Long
+        studyID = CLng(Me.OpenArgs)
+        Me.RecordSource = "SELECT * FROM tblStudies WHERE StudyID=" & studyID
+        Me.AllowAdditions = False
+        Me.lblTitle.Caption = "Study " & Nz(Me!StudyNumber, "") & " Quick Edit"
+        Me.lblSubtitle.Caption = Nz(Me!SponsorProtocol, "")
+    End If
+End Sub
+
+Private Sub cmdAddClient_Click()
+    Dim clientName As String
+    clientName = Trim(InputBox("Enter new client name:", "Add Client"))
+    If clientName = "" Then Exit Sub
+    If DCount("*", "tblClients", "ClientName='" & Replace(clientName, "'", "''") & "'") > 0 Then
+        MsgBox "Client '" & clientName & "' already exists.", vbExclamation
+        Exit Sub
+    End If
+    Dim db As DAO.Database
+    Set db = CurrentDb()
+    db.Execute "INSERT INTO tblClients (ClientName) VALUES ('" & Replace(clientName, "'", "''") & "')", dbFailOnError
+    Dim newID As Long
+    newID = db.OpenRecordset("SELECT MAX(ClientID) AS ID FROM tblClients")(0)
+    Me.cboClientID.Requery
+    Me.cboClientID.Value = newID
+    WriteLog "Add Client", "frmEditStudyQuick", "Client: " & clientName
+End Sub
+
+Private Sub cmdSave_Click()
+    If Not ValidateForm() Then Exit Sub
+    Dim wasNew As Boolean
+    wasNew = Me.NewRecord
+    If Me.Dirty Then Me.Dirty = False
+    WriteLog IIf(wasNew, "Add Study", "Edit Study"), "frmEditStudyQuick", "StudyID: " & Nz(Me!StudyID, 0)
+    DoCmd.Close acForm, Me.Name
+End Sub
+
+Private Sub cmdCancel_Click()
+    If Me.Dirty Then Me.Undo
+    DoCmd.Close acForm, Me.Name
+End Sub
+
+Private Function ValidateForm() As Boolean
+    ValidateForm = False
+    If Trim(Nz(Me!SponsorProtocol, "")) = "" Then
+        MsgBox "Sponsor Protocol is required.", vbExclamation: Exit Function
+    End If
+    If Trim(Nz(Me!ClientProtocol, "")) = "" Then
+        MsgBox "Client Protocol is required.", vbExclamation: Exit Function
+    End If
+    If Trim(Nz(Me!StudyNumber, "")) = "" Then
+        MsgBox "Study Number is required.", vbExclamation: Exit Function
+    End If
+    If Trim(Nz(Me!Matrix, "")) = "" Then
+        MsgBox "Matrix is required.", vbExclamation: Exit Function
+    End If
+    If Trim(Nz(Me!StorageTemp, "")) = "" Then
+        MsgBox "Storage Temp is required.", vbExclamation: Exit Function
+    End If
+    If IsNull(Me!Tech1ID) Then
+        MsgBox "Tech 1 is required.", vbExclamation: Exit Function
+    End If
+    If IsNull(Me!Tech2ID) Then
+        MsgBox "Tech 2 is required.", vbExclamation: Exit Function
+    End If
+    ValidateForm = True
+End Function
+
+Private Sub cboStorageTemp_NotInList(NewData As String, Response As Integer)
+    MsgBox "'" & NewData & "' is not a valid option. Please choose from the list.", vbExclamation
+    Response = acDataErrContinue
+End Sub
+Step 3 — Add an "Add Study" button to fsubExternalShipments
+
+Add cmdAddStudy alongside cmdEditStudy:
+
+vb
+Private Sub cmdAddStudy_Click()
+    DoCmd.OpenForm "frmEditStudyQuick", , , , , acDialog, "NEW"
+    RefreshFromTechFilter
+End Sub
+
+cmdEditStudy_Click stays exactly as it is — it already passes selectedStudyID as OpenArgs, which the new Form_Load still handles correctly for edit mode.
+
+Step 4 — Test
+From the External dashboard, click Add Study → blank form opens titled "Add New Study", CC pre-filled
+Leave Tech1 blank, click Save → validation blocks it, tells you what's missing
+Fill everything, Save → closes, Table 2/3 refresh, new study appears
+Click a study, Edit Study → all fields populate, title shows the real study number
+Change Tech1 to someone else, Save → study disappears from your filtered view (since you're no longer Tech1) unless you also have them checked in Table 1
