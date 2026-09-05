@@ -1,0 +1,36 @@
+Public Sub UpdateShipmentStatusFromDiscrepancies(shipmentID As Long)
+    Dim unresolvedCount As Long
+    Dim totalCount      As Long
+    unresolvedCount = Nz(DCount("*", "tblDiscrepancies", "ShipmentID=" & shipmentID & " AND Resolved=False"), 0)
+    totalCount      = Nz(DCount("*", "tblDiscrepancies", "ShipmentID=" & shipmentID), 0)
+    If totalCount = 0 Then Exit Sub
+
+    Dim newStatus As String
+    newStatus = IIf(unresolvedCount > 0, "Discrepancy", "Resolved")
+    CurrentDb.Execute "UPDATE tblShipments SET ShipmentStatus='" & newStatus & _
+                       "' WHERE ShipmentID=" & shipmentID, dbFailOnError
+End Sub
+
+Public Function ConfirmAndCascadeResolve(shipmentID As Long) As Boolean
+    Dim unresolvedCount As Long
+    unresolvedCount = Nz(DCount("*", "tblDiscrepancies", "ShipmentID=" & shipmentID & " AND Resolved=False"), 0)
+
+    If unresolvedCount = 0 Then
+        ConfirmAndCascadeResolve = True
+        Exit Function
+    End If
+
+    If MsgBox("This shipment has " & unresolvedCount & " unresolved discrepancy(ies)." & vbCrLf & _
+              "Setting status to Resolved will mark all discrepancies for this shipment as resolved too." & _
+              vbCrLf & vbCrLf & "Continue?", vbYesNo + vbQuestion, "Confirm Resolve") = vbNo Then
+        ConfirmAndCascadeResolve = False
+        Exit Function
+    End If
+
+    CurrentDb.Execute "UPDATE tblDiscrepancies SET Resolved=True, ResolvedBy='" & _
+        Replace(gCurrentUser, "'", "''") & "', ResolvedDate=Now() " & _
+        "WHERE ShipmentID=" & shipmentID & " AND Resolved=False", dbFailOnError
+
+    WriteLog "Cascade Resolve Discrepancies", "modGlobals", "ShipmentID: " & shipmentID
+    ConfirmAndCascadeResolve = True
+End Function
