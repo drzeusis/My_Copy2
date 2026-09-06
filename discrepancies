@@ -1,280 +1,34 @@
-Backend changes
-
-tblShipments — add:
-
-Field	Type	Default
-ShipmentStatus	Short Text 50	Received
-
-tblDiscrepancies — create:
-
-Field	Type
-DiscrepancyID	AutoNumber (PK)
-ShipmentID	Number, Long Integer (FK → tblShipments)
-DiscrepancyType	Short Text 50
-SamplesNumber	Number, Long Integer
-Description	Short Text 255
-ReportedBy	Short Text 100
-DateReported	Date/Time
-Resolved	Yes/No
-ResolvedBy	Short Text 100
-ResolvedDate	Date/Time
-Resolution	Short Text 255
-
-One-time backfill (Default Value only applies to new rows, not existing ones) — run once in a query or the Immediate Window:
-
-sql
-UPDATE tblShipments SET ShipmentStatus = 'Received' WHERE ShipmentStatus Is Null
-
-Refresh linked tables in the frontend after both changes.
-
-Shared helpers in modGlobals
-vb
-Public Sub UpdateShipmentStatusFromDiscrepancies(shipmentID As Long)
-    Dim unresolvedCount As Long
-    Dim totalCount      As Long
-    unresolvedCount = Nz(DCount("*", "tblDiscrepancies", "ShipmentID=" & shipmentID & " AND Resolved=False"), 0)
-    totalCount      = Nz(DCount("*", "tblDiscrepancies", "ShipmentID=" & shipmentID), 0)
-    If totalCount = 0 Then Exit Sub
-
-    Dim newStatus As String
-    newStatus = IIf(unresolvedCount > 0, "Discrepancy", "Resolved")
-    CurrentDb.Execute "UPDATE tblShipments SET ShipmentStatus='" & newStatus & _
-                       "' WHERE ShipmentID=" & shipmentID, dbFailOnError
-End Sub
-
-Public Function ConfirmAndCascadeResolve(shipmentID As Long) As Boolean
-    Dim unresolvedCount As Long
-    unresolvedCount = Nz(DCount("*", "tblDiscrepancies", "ShipmentID=" & shipmentID & " AND Resolved=False"), 0)
-
-    If unresolvedCount = 0 Then
-        ConfirmAndCascadeResolve = True
-        Exit Function
-    End If
-
-    If MsgBox("This shipment has " & unresolvedCount & " unresolved discrepancy(ies)." & vbCrLf & _
-              "Setting status to Resolved will mark all discrepancies for this shipment as resolved too." & _
-              vbCrLf & vbCrLf & "Continue?", vbYesNo + vbQuestion, "Confirm Resolve") = vbNo Then
-        ConfirmAndCascadeResolve = False
-        Exit Function
-    End If
-
-    CurrentDb.Execute "UPDATE tblDiscrepancies SET Resolved=True, ResolvedBy='" & _
-        Replace(gCurrentUser, "'", "''") & "', ResolvedDate=Now() " & _
-        "WHERE ShipmentID=" & shipmentID & " AND Resolved=False", dbFailOnError
-
-    WriteLog "Cascade Resolve Discrepancies", "modGlobals", "ShipmentID: " & shipmentID
-    ConfirmAndCascadeResolve = True
-End Function
-Table 3 (subExternalShipmentsList) — add ShipmentStatus column
-
-Add a Combo Box:
-
-Property	Value
-Name	colShipmentStatus
-Control Source	ShipmentStatus
-Row Source Type	Value List
-Row Source	Received;Discrepancy;Resolved;Pending;No Manifest
-Limit To List	Yes
-Locked	No
-
-Conditional formatting: Len(Trim(Nz([colShipmentStatus],"")))=0 → light red (consistent with the other columns).
-
-VBA (add to subExternalShipmentsList):
-
-vb
-Private Sub colShipmentStatus_NotInList(NewData As String, Response As Integer)
-    MsgBox "'" & NewData & "' is not a valid status. Please choose from the list.", vbExclamation
-    Response = acDataErrContinue
-End Sub
-
-Private Sub colShipmentStatus_AfterUpdate()
-    If Me.colShipmentStatus.Value = "Resolved" Then
-        Dim shipmentID As Long
-        shipmentID = Me.colShipmentID.Value
-        If Not ConfirmAndCascadeResolve(shipmentID) Then
-            Me.colShipmentStatus.Value = Me.colShipmentStatus.OldValue
-        End If
-    End If
-End Sub
-
-Update RefreshTable3 in fsubExternalShipments — add sh.ShipmentStatus, to the SELECT list:
-
-vb
-sql = "SELECT sh.ShipmentID, sh.SR, st.StudyNumber, st.Matrix, sh.Waybill, sh.Samples, sh.Boxes, " & _
-      "sh.Condition, sh.SplitType, st.StorageTemp, sh.StudyID, sh.ShipmentStatus, " & _
-Table 4 (subDiscrepanciesList) — simplify to view-only
-
-Change Record Source built in RefreshDiscrepancies (in fsubExternalShipments) to:
-
-vb
-Me.subDiscrepanciesList.Form.RecordSource = _
-    "SELECT DateReported, DiscrepancyType, SamplesNumber, Resolved FROM tblDiscrepancies " & _
-    "WHERE ShipmentID = " & currentShipmentID & " ORDER BY DateReported DESC"
-
-Remove entirely (no longer needed): cmdAddDiscrepancy_Click, cmdResolveDiscrepancy_Click, CaptureDiscrepancySelection, GetSelectedDiscrepancyIDs, the discSelTop/discSelHeight variables, and the two buttons themselves from fsubExternalShipments's design. Also remove Form_Click/Form_MouseUp from subDiscrepanciesList — no selection capture needed on a view-only list.
-
-New form: frmDiscrepancies
-
-Form properties: Pop Up=Yes, Modal=Yes, Border Style=Dialog (these are ignored when embedded as a subform, so it's safe to use in both contexts).
-
-Controls: lblStudyTitle, subDiscrepancySummaryList (subform, left panel), and on the right: cboSR, cboDiscrepancyType, txtSamplesNumber, txtDescription, txtReportedBy (Locked), txtDateReported (Locked), chkResolved, txtResolvedBy (Locked), txtResolvedDate (Locked), txtResolution, cmdNew, cmdSave, cmdClose.
-
-VBA:
-
-vb
-Option Compare Database
-Option Explicit
-
-Private currentStudyID As Long
-Private isAddingNew    As Boolean
-
-Private Sub Form_Load()
-    isAddingNew = False
-    If Not IsNull(Me.OpenArgs) And Me.OpenArgs <> "" Then
-        LoadForStudy CLng(Me.OpenArgs)
-    End If
-End Sub
-
-Public Sub LoadForStudy(studyID As Long)
-    currentStudyID = studyID
-    Me.lblStudyTitle.Caption = "Discrepancies — Study " & _
-        Nz(DLookup("StudyNumber", "tblStudies", "StudyID=" & studyID), "")
-
-    Me.subDiscrepancySummaryList.Form.RecordSource = _
-        "SELECT d.DiscrepancyID, sh.SR & ' | ' & Nz(d.DiscrepancyType,'') AS DisplayText, d.Resolved " & _
-        "FROM tblDiscrepancies d INNER JOIN tblShipments sh ON d.ShipmentID = sh.ShipmentID " & _
-        "WHERE sh.StudyID = " & studyID & " ORDER BY sh.SR, d.DateReported DESC"
-    Me.subDiscrepancySummaryList.Form.Requery
-
-    ClearDetailPanel
-End Sub
-
-Public Sub DiscrepancySelected(discrepancyID As Long)
-    isAddingNew = False
-    If discrepancyID = 0 Then
-        ClearDetailPanel
+Private Sub cmdAddDiscrepancy_Click()
+    Dim ids() As Long
+    Dim count As Long
+    GetSelectedIDs ids, count
+    If count = 0 Then
+        MsgBox "Please select a shipment.", vbExclamation
         Exit Sub
     End If
-    Me.RecordSource = "SELECT * FROM tblDiscrepancies WHERE DiscrepancyID=" & discrepancyID
-    SetDetailEnabled True
-    Me.cboSR.Enabled = False
-End Sub
-
-Private Sub ClearDetailPanel()
-    Me.RecordSource = ""
-    SetDetailEnabled False
-End Sub
-
-Private Sub SetDetailEnabled(state As Boolean)
-    Me.cboSR.Enabled              = state
-    Me.cboDiscrepancyType.Enabled = state
-    Me.txtSamplesNumber.Enabled   = state
-    Me.txtDescription.Enabled     = state
-    Me.chkResolved.Enabled        = state
-    Me.txtResolution.Enabled      = state
-    Me.cmdSave.Enabled            = state
-End Sub
-
-Private Sub cmdNew_Click()
-    If currentStudyID = 0 Then Exit Sub
-    isAddingNew = True
-    Me.RecordSource = "tblDiscrepancies"
-    Me.AllowAdditions = True
-    DoCmd.GoToRecord , , acNewRec
-
-    Me.cboSR.RowSource = "SELECT ShipmentID, SR FROM tblShipments WHERE StudyID=" & currentStudyID & " ORDER BY SR"
-    Me.cboSR.Enabled = True
-    SetDetailEnabled True
-    Me!DateReported = Now()
-    Me!ReportedBy = gCurrentUser
-    Me!Resolved = False
-End Sub
-
-Private Sub cmdSave_Click()
-    If IsNull(Me!ShipmentID) Then
-        MsgBox "Please select a shipment (SR).", vbExclamation
-        Exit Sub
-    End If
-    If Trim(Nz(Me!DiscrepancyType, "")) = "" Then
-        MsgBox "Please select a discrepancy type.", vbExclamation
+    If count > 1 Then
+        MsgBox "Please select only one shipment to add a discrepancy.", vbExclamation
         Exit Sub
     End If
 
     Dim shipmentID As Long
-    shipmentID = Me!ShipmentID
+    shipmentID = ids(0)
 
-    If Me!Resolved = True And IsNull(Me!ResolvedDate) Then
-        Me!ResolvedBy = gCurrentUser
-        Me!ResolvedDate = Now()
-    End If
+    Dim studyNumber As String
+    Dim sr As String
+    studyNumber = Nz(DLookup("StudyNumber", "tblStudies", _
+                  "StudyID=(SELECT StudyID FROM tblShipments WHERE ShipmentID=" & shipmentID & ")"), "")
+    sr = Nz(DLookup("SR", "tblShipments", "ShipmentID=" & shipmentID), "")
 
-    If Me.Dirty Then Me.Dirty = False
+    If MsgBox("Do you want to add a discrepancy to '" & studyNumber & "' SR# '" & sr & "'?", _
+              vbYesNo + vbQuestion, "Add Discrepancy") = vbNo Then Exit Sub
 
-    WriteLog IIf(isAddingNew, "Add Discrepancy", "Edit Discrepancy"), "frmDiscrepancies", "ShipmentID: " & shipmentID
+    Dim db As DAO.Database
+    Set db = CurrentDb()
+    db.Execute "INSERT INTO tblDiscrepancies (ShipmentID, DateReported, Resolved) VALUES (" & _
+               shipmentID & ", #" & Format(Date, "mm/dd/yyyy") & "#, False)", dbFailOnError
+
+    WriteLog "Add Discrepancy", "fsubExternalShipments", "ShipmentID: " & shipmentID
     UpdateShipmentStatusFromDiscrepancies shipmentID
-
-    isAddingNew = False
-    LoadForStudy currentStudyID
-End Sub
-
-Private Sub cmdClose_Click()
-    DoCmd.Close acForm, Me.Name
-End Sub
-
-Private Sub cboDiscrepancyType_NotInList(NewData As String, Response As Integer)
-    MsgBox "'" & NewData & "' is not a valid type. Please choose from the list.", vbExclamation
-    Response = acDataErrContinue
-End Sub
-
-cboDiscrepancyType: Row Source Type=Value List, Row Source=Subject;Timepoint;Matrix;Sample Type;Duplicate;Count, Limit To List=Yes.
-cboSR: Row Source Type=Table/Query, Column Count=2, Bound Column=1, Column Widths=0cm;3cm, Limit To List=Yes.
-
-subDiscrepancySummaryList (left panel)
-
-Form properties: Record Source (blank), Default View=Datasheet, Allow Edits/Additions/Deletions=No.
-
-Columns: colDiscrepancyID (hidden), colDisplayText (Locked), colResolved (hidden, used only for conditional formatting).
-
-Conditional formatting on colDisplayText:
-
-[colResolved]=True → light green
-[colResolved]=False → light red
-
-VBA:
-
-vb
-Option Compare Database
-Option Explicit
-
-Private Sub Form_Current()
-    If Me.RecordSource = "" Then Exit Sub
-    Me.Parent.DiscrepancySelected Nz(Me.colDiscrepancyID, 0)
-End Sub
-Embed in frmStudies
-Add a Tab Control anywhere with open space, one page, Caption = Discrepancies
-Inside that page, add a Subform control, Source Object = frmDiscrepancies, name it subDiscrepanciesEmbed
-In frmStudies' existing StudySelected(studyID) sub, add one line at the end:
-vb
-Me.subDiscrepanciesEmbed.Form.LoadForStudy studyID
-
-Nothing else in frmStudies changes.
-
-Popup from External dashboard
-
-Add cmdDiscrepancies button to fsubExternalShipments:
-
-vb
-Private Sub cmdDiscrepancies_Click()
-    If selectedStudyID = 0 Then
-        MsgBox "Please select a specific study first.", vbExclamation
-        Exit Sub
-    End If
-    DoCmd.OpenForm "frmDiscrepancies", , , , , acDialog, selectedStudyID
     RefreshTable3
 End Sub
-Test
-Add a discrepancy from frmDiscrepancies → shipment's status auto-flips to Discrepancy in Table 3
-Resolve it in frmDiscrepancies → status auto-flips to Resolved
-In Table 3, manually set an unresolved shipment's status to Resolved directly → confirmation prompt appears, Yes cascades and resolves all its discrepancies, No reverts the dropdown
-Open frmStudies, click a study → Discrepancies tab shows that study's list, red/green correctly
-From External, select a study, click Discrepancies → popup opens fi
