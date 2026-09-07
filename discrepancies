@@ -51,3 +51,27 @@ Public Sub UpdateShipmentStatusFromDiscrepancies(shipmentID As Long)
 End Sub
 
 MsgBox "Fired. DiscrepancyID=" & Nz(Me!DiscrepancyID, 0) & " ShipmentID=" & Nz(Me!ShipmentID, 0)
+
+Private Sub colDateReported_GotFocus()
+    CaptureCurrentRow
+End Sub
+
+Private Sub colDiscrepancyType_GotFocus()
+    CaptureCurrentRow
+End Sub
+
+Private Sub colSamplesNumber_GotFocus()
+    CaptureCurrentRow
+End Sub
+
+Private Sub colDescription_GotFocus()
+    CaptureCurrentRow
+End Sub
+
+Private Sub colResolved_GotFocus()
+    CaptureCurrentRow
+End Sub
+
+Private Sub CaptureCurrentRow()
+    Me.Parent.CaptureDiscrepancySelection Nz(Me!DiscrepancyID, 0), Nz(Me!ShipmentID, 0)
+End Sub
