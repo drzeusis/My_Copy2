@@ -75,3 +75,11 @@ End Sub
 Private Sub CaptureCurrentRow()
     Me.Parent.CaptureDiscrepancySelection Nz(Me!DiscrepancyID, 0), Nz(Me!ShipmentID, 0)
 End Sub
+
+Private Sub Form_Click()
+    Me.Parent.CaptureDiscrepancySelection Nz(Me!DiscrepancyID, 0), Nz(Me!ShipmentID, 0)
+End Sub
+
+Private Sub Form_Current()
+    Me.Parent.CaptureDiscrepancySelection Nz(Me!DiscrepancyID, 0), Nz(Me!ShipmentID, 0)
+End Sub
