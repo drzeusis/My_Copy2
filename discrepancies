@@ -49,3 +49,5 @@ Public Sub UpdateShipmentStatusFromDiscrepancies(shipmentID As Long)
     CurrentDb.Execute "UPDATE tblShipments SET ShipmentStatus='" & newStatus & _
                        "' WHERE ShipmentID=" & shipmentID, dbFailOnError
 End Sub
+
+MsgBox "Fired. DiscrepancyID=" & Nz(Me!DiscrepancyID, 0) & " ShipmentID=" & Nz(Me!ShipmentID, 0)
