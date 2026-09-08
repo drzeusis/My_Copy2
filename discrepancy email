@@ -37,24 +37,28 @@ Public Sub SendDiscrepancyEmails(shipmentIDs() As Long, count As Long)
     End If
 
     Dim currentProtocol As String
-    Dim scientistName   As String
-    Dim sciEmails        As String
-    Dim tableRows        As String
-    Dim sentIDs          As String
+    Dim firstScientist  As String
+    Dim namesVary       As Boolean
+    Dim sciEmails       As String
+    Dim tableRows       As String
+    Dim sentIDs         As String
     currentProtocol = ""
 
     Do While Not rs.EOF
         If Nz(rs!SponsorProtocol, "") <> currentProtocol Then
             If currentProtocol <> "" Then
-                If SendOneDiscrepancyEmail(currentProtocol, scientistName, sciEmails, tableRows) Then
+                If SendOneDiscrepancyEmail(currentProtocol, firstScientist, namesVary, sciEmails, tableRows) Then
                     MarkDiscrepanciesEmailed sentIDs
                 End If
             End If
             currentProtocol = Nz(rs!SponsorProtocol, "")
-            scientistName   = Nz(rs!Scientist, "")
+            firstScientist  = Nz(rs!Scientist, "")
+            namesVary       = False
             sciEmails       = ""
             tableRows       = ""
             sentIDs         = ""
+        Else
+            If Trim(Nz(rs!Scientist, "")) <> Trim(firstScientist) Then namesVary = True
         End If
 
         Dim sciEmail As String
@@ -81,7 +85,7 @@ Public Sub SendDiscrepancyEmails(shipmentIDs() As Long, count As Long)
     Loop
     rs.Close
 
-    If SendOneDiscrepancyEmail(currentProtocol, scientistName, sciEmails, tableRows) Then
+    If SendOneDiscrepancyEmail(currentProtocol, firstScientist, namesVary, sciEmails, tableRows) Then
         MarkDiscrepanciesEmailed sentIDs
     End If
 
@@ -92,23 +96,29 @@ errHandler:
 End Sub
 
 Private Function SendOneDiscrepancyEmail(protocolName As String, scientistName As String, _
-                                          sciEmails As String, tableRows As String) As Boolean
+                                          namesVary As Boolean, sciEmails As String, tableRows As String) As Boolean
     SendOneDiscrepancyEmail = False
     If sciEmails = "" Then
         MsgBox "Scientist Email is missing for protocol '" & protocolName & "' — skipping this email.", vbExclamation
         Exit Function
     End If
 
-    Dim firstName As String
-    If InStr(scientistName, ",") > 0 Then
-        firstName = Trim(Mid(scientistName, InStr(scientistName, ",") + 1))
+    Dim greeting As String
+    If namesVary Then
+        greeting = "Hello all"
     Else
-        firstName = scientistName
+        Dim firstName As String
+        If InStr(scientistName, ",") > 0 Then
+            firstName = Trim(Mid(scientistName, InStr(scientistName, ",") + 1))
+        Else
+            firstName = scientistName
+        End If
+        greeting = "Hi " & firstName
     End If
 
     Dim html As String
     html = "<html><body style='font-family:Calibri;font-size:12pt;'>"
-    html = html & "<p>Hi " & firstName & ",</p>"
+    html = html & "<p>" & greeting & ",</p>"
     html = html & "<p>The following samples have unresolved discrepancies for protocol <b>" & protocolName & "</b>:</p>"
     html = html & "<table border='1' cellpadding='5' cellspacing='0' style='border-collapse:collapse;font-size:12pt;'>"
     html = html & "<tr style='background:#f2f2f2;font-weight:bold;'>"
