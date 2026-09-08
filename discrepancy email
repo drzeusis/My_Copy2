@@ -1,0 +1,156 @@
+Step 1 — Backend
+
+Add to tblDiscrepancies:
+
+Field	Type
+DateLastEmailSent	Date/Time
+
+Refresh linked table.
+
+Step 2 — modGlobals
+vb
+Public Sub SendDiscrepancyEmails(shipmentIDs() As Long, count As Long)
+    On Error GoTo errHandler
+
+    Dim idList As String
+    Dim i As Long
+    For i = 0 To count - 1
+        If idList <> "" Then idList = idList & ","
+        idList = idList & shipmentIDs(i)
+    Next i
+
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    Set db = CurrentDb()
+    Set rs = db.OpenRecordset( _
+        "SELECT d.DiscrepancyID, d.ShipmentID, d.DiscrepancyType, d.SamplesNumber, d.Description, d.DateReported, " & _
+        "sh.SR, sh.Waybill, st.StudyNumber, st.SponsorProtocol, st.Scientist, st.ScientistEmail " & _
+        "FROM (tblDiscrepancies d INNER JOIN tblShipments sh ON d.ShipmentID = sh.ShipmentID) " & _
+        "INNER JOIN tblStudies st ON sh.StudyID = st.StudyID " & _
+        "WHERE d.Resolved = False AND d.ShipmentID In (" & idList & ") " & _
+        "ORDER BY st.SponsorProtocol, sh.SR, d.DateReported")
+
+    If rs.EOF Then
+        MsgBox "No unresolved discrepancies found for the selected shipment(s).", vbInformation
+        rs.Close
+        Exit Sub
+    End If
+
+    Dim currentProtocol As String
+    Dim scientistName   As String
+    Dim sciEmails        As String
+    Dim tableRows        As String
+    Dim sentIDs          As String
+    currentProtocol = ""
+
+    Do While Not rs.EOF
+        If Nz(rs!SponsorProtocol, "") <> currentProtocol Then
+            If currentProtocol <> "" Then
+                If SendOneDiscrepancyEmail(currentProtocol, scientistName, sciEmails, tableRows) Then
+                    MarkDiscrepanciesEmailed sentIDs
+                End If
+            End If
+            currentProtocol = Nz(rs!SponsorProtocol, "")
+            scientistName   = Nz(rs!Scientist, "")
+            sciEmails       = ""
+            tableRows       = ""
+            sentIDs         = ""
+        End If
+
+        Dim sciEmail As String
+        sciEmail = Nz(rs!ScientistEmail, "")
+        If sciEmail <> "" And InStr(1, sciEmails, sciEmail, vbTextCompare) = 0 Then
+            If sciEmails <> "" Then sciEmails = sciEmails & ";"
+            sciEmails = sciEmails & sciEmail
+        End If
+
+        tableRows = tableRows & "<tr>" & _
+            "<td>" & Nz(rs!SR, "")             & "</td>" & _
+            "<td>" & Nz(rs!StudyNumber, "")     & "</td>" & _
+            "<td>" & Nz(rs!Waybill, "")         & "</td>" & _
+            "<td>" & Nz(rs!DiscrepancyType, "") & "</td>" & _
+            "<td>" & Nz(rs!SamplesNumber, "")   & "</td>" & _
+            "<td>" & Nz(rs!Description, "")     & "</td>" & _
+            "<td>" & Format(Nz(rs!DateReported, Date), "dd-mmm-yyyy") & "</td>" & _
+            "</tr>"
+
+        If sentIDs <> "" Then sentIDs = sentIDs & ","
+        sentIDs = sentIDs & rs!DiscrepancyID
+
+        rs.MoveNext
+    Loop
+    rs.Close
+
+    If SendOneDiscrepancyEmail(currentProtocol, scientistName, sciEmails, tableRows) Then
+        MarkDiscrepanciesEmailed sentIDs
+    End If
+
+    Exit Sub
+
+errHandler:
+    MsgBox "Error sending discrepancy emails: " & Err.Description, vbCritical
+End Sub
+
+Private Function SendOneDiscrepancyEmail(protocolName As String, scientistName As String, _
+                                          sciEmails As String, tableRows As String) As Boolean
+    SendOneDiscrepancyEmail = False
+    If sciEmails = "" Then
+        MsgBox "Scientist Email is missing for protocol '" & protocolName & "' — skipping this email.", vbExclamation
+        Exit Function
+    End If
+
+    Dim firstName As String
+    If InStr(scientistName, ",") > 0 Then
+        firstName = Trim(Mid(scientistName, InStr(scientistName, ",") + 1))
+    Else
+        firstName = scientistName
+    End If
+
+    Dim html As String
+    html = "<html><body style='font-family:Calibri;font-size:12pt;'>"
+    html = html & "<p>Hi " & firstName & ",</p>"
+    html = html & "<p>The following samples have unresolved discrepancies for protocol <b>" & protocolName & "</b>:</p>"
+    html = html & "<table border='1' cellpadding='5' cellspacing='0' style='border-collapse:collapse;font-size:12pt;'>"
+    html = html & "<tr style='background:#f2f2f2;font-weight:bold;'>"
+    html = html & "<td>SR</td><td>Study Number</td><td>Waybill</td><td>Discrepancy Type</td>" & _
+                  "<td>Samples #</td><td>Description</td><td>Date Reported</td></tr>"
+    html = html & tableRows
+    html = html & "</table>"
+    html = html & "<p>Please advise on how you'd like these discrepancies resolved.</p>"
+    html = html & "</body></html>"
+
+    Dim olApp  As Object
+    Dim olMail As Object
+    Set olApp  = CreateObject("Outlook.Application")
+    Set olMail = olApp.CreateItem(0)
+    With olMail
+        .To      = sciEmails
+        .CC      = "mtl-watson@crl.com"
+        .Subject = "Discrepancy Notification - Protocol# " & protocolName
+        .Display
+        .htmlBody = html & .htmlBody
+    End With
+
+    WriteLog "Send Discrepancy Email", "modGlobals", "Protocol: " & protocolName
+    SendOneDiscrepancyEmail = True
+End Function
+
+Private Sub MarkDiscrepanciesEmailed(discrepancyIDList As String)
+    If discrepancyIDList = "" Then Exit Sub
+    CurrentDb.Execute "UPDATE tblDiscrepancies SET DateLastEmailSent=Now() " & _
+                       "WHERE DiscrepancyID In (" & discrepancyIDList & ")", dbFailOnError
+End Sub
+Step 3 — fsubExternalShipments
+vb
+Private Sub cmdSendDiscrepancyEmail_Click()
+    Dim ids() As Long
+    Dim count As Long
+    GetSelectedIDs ids, count
+    If count = 0 Then
+        MsgBox "Please select at least one shipment.", vbExclamation
+        Exit Sub
+    End If
+    SendDiscrepancyEmails ids, count
+End Sub
+
+Add a cmdSendDiscrepancyEmail button to the design, caption "Send Discrepancy Email".
