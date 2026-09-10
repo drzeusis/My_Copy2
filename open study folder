@@ -1,0 +1,85 @@
+Step 1 — Reusable function in modGlobals
+vb
+Public Function GetStudyFolderPath(studyNumber As String) As String
+    Const ROOT_PATH As String = "\\sen-pr-fil-02\projects\"
+    GetStudyFolderPath = ""
+
+    studyNumber = Trim(studyNumber)
+    If studyNumber = "" Then Exit Function
+
+    Dim folderDigit As String
+    Dim firstChar As String
+    firstChar = Left(studyNumber, 1)
+
+    If Not IsNumeric(firstChar) Then
+        folderDigit = "0"
+    ElseIf Len(studyNumber) = 8 Then
+        folderDigit = Mid(studyNumber, 5, 1)
+    Else
+        folderDigit = firstChar
+    End If
+
+    Dim searchPrefix As String
+    If folderDigit = "0" Then
+        searchPrefix = "_XXXX0XXX(SAP)"
+    Else
+        searchPrefix = folderDigit & "XXXXXX OR XXXX" & folderDigit & "XXX(SAP)"
+    End If
+
+    Dim digitFolderName As String
+    digitFolderName = FindMatchingFolder(ROOT_PATH, searchPrefix)
+    If digitFolderName = "" Then Exit Function
+
+    GetStudyFolderPath = ROOT_PATH & digitFolderName & "\" & studyNumber
+End Function
+
+Private Function FindMatchingFolder(basePath As String, searchPrefix As String) As String
+    FindMatchingFolder = ""
+
+    ' Normalize: remove spaces so "1XXXXXX OR XXXX1XXX(SAP)" matches
+    ' regardless of whether the real folder has a space before "(SAP)"
+    Dim normalizedPrefix As String
+    normalizedPrefix = Replace(searchPrefix, " ", "")
+
+    Dim folderName As String
+    folderName = Dir(basePath, vbDirectory)
+
+    Do While folderName <> ""
+        If folderName <> "." And folderName <> ".." Then
+            If (GetAttr(basePath & folderName) And vbDirectory) = vbDirectory Then
+                Dim normalizedActual As String
+                normalizedActual = Replace(folderName, " ", "")
+
+                If Left(normalizedActual, Len(normalizedPrefix)) = normalizedPrefix Then
+                    If InStr(1, folderName, "DO NOT USE", vbTextCompare) = 0 Then
+                        FindMatchingFolder = folderName
+                        Exit Function
+                    End If
+                End If
+            End If
+        End If
+        folderName = Dir()
+    Loop
+End Function
+Step 2 — Button in fsubExternalShipments
+vb
+Private Sub cmdOpenStudyFolder_Click()
+    If selectedStudyID = 0 Then
+        MsgBox "Please select a specific study first.", vbExclamation
+        Exit Sub
+    End If
+
+    Dim studyNumber As String
+    studyNumber = Nz(DLookup("StudyNumber", "tblStudies", "StudyID=" & selectedStudyID), "")
+
+    Dim folderPath As String
+    folderPath = GetStudyFolderPath(studyNumber)
+
+    If folderPath = "" Or Dir(folderPath, vbDirectory) = "" Then
+        MsgBox "Could not find the folder for study '" & studyNumber & "'.", vbExclamation
+        Exit Sub
+    End If
+
+    Shell "explorer.exe """ & folderPath & """", vbNormalFocus
+    WriteLog "Open Study Folder", "fsubExternalShipments", "StudyID: " & selectedStudyID & " Path: " & folderPath
+End Sub
