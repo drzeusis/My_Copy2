@@ -1,0 +1,79 @@
+1. Refresh button also refreshes the study-reassignment combo
+vb
+Private Sub cmdRefresh_Click()
+    RefreshFromTechFilter
+    Me.subExternalShipmentsList.Form.colStudyNumber.Requery
+End Sub
+
+colStudyNumber's Row Source is its own separate query, independent of the form's RecordSource — requerying the form doesn't touch it, so it needs this explicit call.
+
+2. Study Number search box (Table 2)
+
+Add a Text Box to fsubExternalShipments, positioned above subStudyFilterList:
+
+Name: txtStudySearch
+vb
+Private Sub txtStudySearch_Change()
+    Dim searchText As String
+    searchText = Me.txtStudySearch.Text
+
+    If searchText = "" Then
+        Me.subStudyFilterList.Form.FilterOn = False
+    Else
+        Me.subStudyFilterList.Form.Filter = "DisplayText LIKE '*" & Replace(searchText, "'", "''") & "*'"
+        Me.subStudyFilterList.Form.FilterOn = True
+    End If
+End Sub
+
+Worth knowing: this filters on DisplayText (which is StudyNumber | Matrix), so typing text that happens to match part of a Matrix name could also surface a row — acceptable for a quick filter, but flag if you want it stricter (matching only the StudyNumber portion). Also, typing anything hides the "-- Show All --" row since it won't match a real study number — clearing the box brings it back.
+
+3. Show/hide Watson-logged shipments checkbox
+
+Add a Check Box to fsubExternalShipments:
+
+Name: chkShowWatsonLogged
+Label Caption: "Show Watson Logged"
+
+Form_Load — add one line to set the default:
+
+vb
+Me.chkShowWatsonLogged.Value = False
+
+RefreshTable3 — make the WatsonLogged filter conditional:
+
+vb
+Private Sub RefreshTable3()
+    Dim checkedIDs As String
+    checkedIDs = GetCheckedTechIDs()
+
+    Dim sql As String
+    sql = "SELECT sh.ShipmentID, sh.SR, sh.DeliveryDate, st.StudyNumber, st.Matrix, sh.Waybill, sh.Samples, sh.Boxes, " & _
+          "sh.Condition, sh.SplitType, st.StorageTemp, sh.StudyID, sh.ShipmentStatus, " & _
+          "IIf(Len(Trim(Nz(st.StudyNumber,''))) > 0 " & _
+          "And Len(Trim(Nz(st.Matrix,''))) > 0 " & _
+          "And Len(Trim(Nz(st.MonitorEmail,''))) > 0 " & _
+          "And Len(Trim(Nz(st.ScientistEmail,''))) > 0 " & _
+          "And Len(Trim(Nz(st.StudyDirectorEmail,''))) > 0, " & _
+          "'Complete', 'Missing') AS StudyInfo " & _
+          "FROM tblShipments sh INNER JOIN tblStudies st ON sh.StudyID = st.StudyID " & _
+          "WHERE ((st.SponsorProtocol='NO RECORD' AND st.Tech1ID Is Null) OR st.Tech1ID In (" & checkedIDs & ")) "
+
+    If Me.chkShowWatsonLogged.Value = False Then
+        sql = sql & "AND sh.WatsonLogged = False "
+    End If
+
+    If selectedStudyID <> 0 Then
+        sql = sql & "AND st.StudyID = " & selectedStudyID & " "
+    End If
+    sql = sql & "ORDER BY sh.DeliveryDate DESC"
+
+    Me.subExternalShipmentsList.Form.RecordSource = sql
+    Me.subExternalShipmentsList.Form.Requery
+End Sub
+
+Add the trigger:
+
+vb
+Private Sub chkShowWatsonLogged_AfterUpdate()
+    RefreshTable3
+End Sub
