@@ -1,0 +1,37 @@
+Public Sub SaveEmailToStudyFolder(mailItem As Object, studyNumbers() As String, studyNumberCount As Long, _
+                                   protocolName As String, srList As String, isCorrection As Boolean)
+    Dim baseFileName As String
+    baseFileName = IIf(isCorrection, "CORRECTION_", "") & "Confirmation_" & _
+                   CleanFileNameForSave(protocolName) & "_" & CleanFileNameForSave(srList) & "_" & _
+                   Format(Now(), "yyyy-mm-dd_hhnnss") & ".msg"
+
+    Dim k As Long
+    For k = 0 To studyNumberCount - 1
+        Dim folderPath As String
+        folderPath = GetStudyFolderPath(studyNumbers(k))
+
+        If folderPath = "" Or Dir(folderPath, vbDirectory) = "" Then
+            MsgBox "Could not find the study folder for '" & studyNumbers(k) & "'. The email was generated but not saved for this study.", vbExclamation
+        Else
+            Dim saveFolder As String
+            saveFolder = folderPath & "\Generated Confirmation of Receipt Emails"
+
+            If Dir(saveFolder, vbDirectory) = "" Then
+                MkDir saveFolder
+            End If
+
+            mailItem.SaveAs saveFolder & "\" & baseFileName, 3 ' olMSG
+        End If
+    Next k
+End Sub
+
+Private Function CleanFileNameForSave(s As String) As String
+    Dim r As String, i As Long
+    r = s
+    Dim bad As String
+    bad = "\/:*?""<>|"
+    For i = 1 To Len(bad)
+        r = Replace(r, Mid(bad, i, 1), "_")
+    Next i
+    CleanFileNameForSave = Trim(r)
+End Function
