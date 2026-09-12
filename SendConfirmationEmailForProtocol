@@ -23,7 +23,7 @@ Public Sub SendConfirmationEmailForProtocol(selectedIDs() As Long, count As Long
 
     For i = 0 To count - 1
         Dim strSQL As String
-        strSQL = "SELECT sh.ShipmentID, sh.DeliveryDate, sh.SR, sh.Samples, sh.Cartons, sh.Waybill, sh.Condition, " & _
+        strSQL = "SELECT sh.ShipmentID, sh.DeliveryDate, sh.SR, sh.Samples, sh.Samples, sh.Waybill, sh.Condition, " & _
                  "st.StudyNumber, st.SponsorProtocol, st.Matrix, st.StorageTemp, " & _
                  "st.MonitorName, st.MonitorEmail, " & _
                  "st.StudyDirector, st.StudyDirectorEmail, " & _
@@ -134,7 +134,7 @@ Public Sub SendConfirmationEmailForProtocol(selectedIDs() As Long, count As Long
             "<td>" & Nz(rs!StudyNumber, "") & "</td>" & _
             "<td>" & Nz(rs!Matrix, "")      & "</td>" & _
             "<td>" & Nz(rs!StorageTemp, "") & "</td>" & _
-            "<td>" & Nz(rs!Cartons, "")     & "</td>" & _
+            "<td>" & Nz(rs!Samples, "")     & "</td>" & _
             "<td>" & Nz(rs!Waybill, "")     & "</td>" & _
             "<td>" & Nz(rs!Condition, "")   & "</td>" & _
             "</tr>"
@@ -184,7 +184,7 @@ Public Sub SendConfirmationEmailForProtocol(selectedIDs() As Long, count As Long
                   "style='border-collapse:collapse;font-size:12pt;'>"
     html = html & "<tr style='background:#f2f2f2;font-weight:bold;'>"
     html = html & "<td>Date</td><td>SR</td><td>Study Number</td>" & _
-                  "<td>Matrix</td><td>Storage Temp</td><td>Cartons</td><td>Waybill</td><td>Condition</td></tr>"
+                  "<td>Matrix</td><td>Storage Temp</td><td>Number of Samples</td><td>Waybill</td><td>Condition</td></tr>"
     html = html & tableRows
     html = html & "</table>"
     html = html & "<p>Once the samples are verified, you might be contacted by us or " & _
