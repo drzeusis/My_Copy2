@@ -1,0 +1,222 @@
+Step 1 — Generalize SaveEmailToStudyFolder in modGlobals
+vb
+Public Sub SaveEmailToStudyFolder(mailItem As Object, studyNumbers() As String, studyNumberCount As Long, _
+                                   protocolName As String, srList As String, subFolderName As String, filePrefix As String)
+    Dim baseFileName As String
+    baseFileName = filePrefix & "_" & CleanFileNameForSave(protocolName) & "_" & CleanFileNameForSave(srList) & "_" & _
+                   Format(Now(), "yyyy-mm-dd_hhnnss") & ".msg"
+
+    Dim k As Long
+    For k = 0 To studyNumberCount - 1
+        Dim folderPath As String
+        folderPath = GetStudyFolderPath(studyNumbers(k))
+
+        If folderPath = "" Or Dir(folderPath, vbDirectory) = "" Then
+            MsgBox "Could not find the study folder for '" & studyNumbers(k) & "'. The email was generated but not saved for this study.", vbExclamation
+        Else
+            Dim saveFolder As String
+            saveFolder = folderPath & "\" & subFolderName
+
+            If Dir(saveFolder, vbDirectory) = "" Then
+                MkDir saveFolder
+            End If
+
+            mailItem.SaveAs saveFolder & "\" & baseFileName, 3 ' olMSG
+        End If
+    Next k
+End Sub
+
+Private Function CleanFileNameForSave(s As String) As String
+    Dim r As String, i As Long
+    r = s
+    Dim bad As String
+    bad = "\/:*?""<>|"
+    For i = 1 To Len(bad)
+        r = Replace(r, Mid(bad, i, 1), "_")
+    Next i
+    CleanFileNameForSave = Trim(r)
+End Function
+Step 2 — Update the confirmation email's call site
+
+In SendConfirmationEmailForProtocol, replace:
+
+vb
+SaveEmailToStudyFolder olMail, studyNumbers, studyNumberCount, firstProtocol, srList, isCorrection
+
+with:
+
+vb
+Dim filePrefix As String
+filePrefix = IIf(isCorrection, "CORRECTION_Confirmation", "Confirmation")
+SaveEmailToStudyFolder olMail, studyNumbers, studyNumberCount, firstProtocol, srList, _
+    "Generated Confirmation of Receipt Emails", filePrefix
+Step 3 — Replace SendDiscrepancyEmails and SendOneDiscrepancyEmail in full
+vb
+Public Sub SendDiscrepancyEmails(shipmentIDs() As Long, count As Long)
+    On Error GoTo errHandler
+
+    Dim idList As String
+    Dim i As Long
+    For i = 0 To count - 1
+        If idList <> "" Then idList = idList & ","
+        idList = idList & shipmentIDs(i)
+    Next i
+
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    Set db = CurrentDb()
+    Set rs = db.OpenRecordset( _
+        "SELECT d.DiscrepancyID, d.ShipmentID, d.DiscrepancyType, d.SamplesNumber, d.Description, d.DateReported, " & _
+        "sh.SR, sh.Waybill, st.StudyNumber, st.SponsorProtocol, st.Scientist, st.ScientistEmail " & _
+        "FROM (tblDiscrepancies d INNER JOIN tblShipments sh ON d.ShipmentID = sh.ShipmentID) " & _
+        "INNER JOIN tblStudies st ON sh.StudyID = st.StudyID " & _
+        "WHERE d.Resolved = False AND d.ShipmentID In (" & idList & ") " & _
+        "ORDER BY st.SponsorProtocol, sh.SR, d.DateReported")
+
+    If rs.EOF Then
+        MsgBox "No unresolved discrepancies found for the selected shipment(s).", vbInformation
+        rs.Close
+        Exit Sub
+    End If
+
+    Dim currentProtocol  As String
+    Dim firstScientist   As String
+    Dim namesVary        As Boolean
+    Dim sciEmails        As String
+    Dim tableRows        As String
+    Dim sentIDs          As String
+    Dim srList           As String
+    Dim studyNumbers()   As String
+    Dim studyNumberCount As Long
+    currentProtocol = ""
+
+    Do While Not rs.EOF
+        If Nz(rs!SponsorProtocol, "") <> currentProtocol Then
+            If currentProtocol <> "" Then
+                If SendOneDiscrepancyEmail(currentProtocol, firstScientist, namesVary, sciEmails, tableRows, _
+                                            srList, studyNumbers, studyNumberCount) Then
+                    MarkDiscrepanciesEmailed sentIDs
+                End If
+            End If
+            currentProtocol  = Nz(rs!SponsorProtocol, "")
+            firstScientist   = Nz(rs!Scientist, "")
+            namesVary        = False
+            sciEmails        = ""
+            tableRows        = ""
+            sentIDs          = ""
+            srList           = ""
+            studyNumberCount = 0
+            ReDim studyNumbers(0)
+        Else
+            If Trim(Nz(rs!Scientist, "")) <> Trim(firstScientist) Then namesVary = True
+        End If
+
+        Dim sciEmail As String
+        sciEmail = Nz(rs!ScientistEmail, "")
+        If sciEmail <> "" And InStr(1, sciEmails, sciEmail, vbTextCompare) = 0 Then
+            If sciEmails <> "" Then sciEmails = sciEmails & ";"
+            sciEmails = sciEmails & sciEmail
+        End If
+
+        Dim thisSR As String
+        thisSR = Nz(rs!SR, "")
+        If InStr(1, ";" & srList & ";", ";" & thisSR & ";", vbTextCompare) = 0 Then
+            If srList <> "" Then srList = srList & ","
+            srList = srList & thisSR
+        End If
+
+        Dim thisStudyNumber As String
+        thisStudyNumber = Nz(rs!StudyNumber, "")
+        Dim foundSN As Boolean
+        foundSN = False
+        Dim sn As Long
+        For sn = 0 To studyNumberCount - 1
+            If studyNumbers(sn) = thisStudyNumber Then foundSN = True: Exit For
+        Next sn
+        If Not foundSN Then
+            ReDim Preserve studyNumbers(studyNumberCount)
+            studyNumbers(studyNumberCount) = thisStudyNumber
+            studyNumberCount = studyNumberCount + 1
+        End If
+
+        tableRows = tableRows & "<tr>" & _
+            "<td>" & Nz(rs!SR, "")             & "</td>" & _
+            "<td>" & Nz(rs!StudyNumber, "")     & "</td>" & _
+            "<td>" & Nz(rs!Waybill, "")         & "</td>" & _
+            "<td>" & Nz(rs!DiscrepancyType, "") & "</td>" & _
+            "<td>" & Nz(rs!SamplesNumber, "")   & "</td>" & _
+            "<td>" & Nz(rs!Description, "")     & "</td>" & _
+            "<td>" & Format(Nz(rs!DateReported, Date), "dd-mmm-yyyy") & "</td>" & _
+            "</tr>"
+
+        If sentIDs <> "" Then sentIDs = sentIDs & ","
+        sentIDs = sentIDs & rs!DiscrepancyID
+
+        rs.MoveNext
+    Loop
+    rs.Close
+
+    If SendOneDiscrepancyEmail(currentProtocol, firstScientist, namesVary, sciEmails, tableRows, _
+                                srList, studyNumbers, studyNumberCount) Then
+        MarkDiscrepanciesEmailed sentIDs
+    End If
+
+    Exit Sub
+
+errHandler:
+    MsgBox "Error sending discrepancy emails: " & Err.Description, vbCritical
+End Sub
+
+Private Function SendOneDiscrepancyEmail(protocolName As String, scientistName As String, _
+                                          namesVary As Boolean, sciEmails As String, tableRows As String, _
+                                          srList As String, studyNumbers() As String, studyNumberCount As Long) As Boolean
+    SendOneDiscrepancyEmail = False
+    If sciEmails = "" Then
+        MsgBox "Scientist Email is missing for protocol '" & protocolName & "' — skipping this email.", vbExclamation
+        Exit Function
+    End If
+
+    Dim greeting As String
+    If namesVary Then
+        greeting = "Hello all"
+    Else
+        Dim firstName As String
+        If InStr(scientistName, ",") > 0 Then
+            firstName = Trim(Mid(scientistName, InStr(scientistName, ",") + 1))
+        Else
+            firstName = scientistName
+        End If
+        greeting = "Hi " & firstName
+    End If
+
+    Dim html As String
+    html = "<html><body style='font-family:Calibri;font-size:12pt;'>"
+    html = html & "<p>" & greeting & ",</p>"
+    html = html & "<p>The following samples have unresolved discrepancies for protocol <b>" & protocolName & "</b>:</p>"
+    html = html & "<table border='1' cellpadding='5' cellspacing='0' style='border-collapse:collapse;font-size:12pt;'>"
+    html = html & "<tr style='background:#f2f2f2;font-weight:bold;'>"
+    html = html & "<td>SR</td><td>Study Number</td><td>Waybill</td><td>Discrepancy Type</td>" & _
+                  "<td>Samples #</td><td>Description</td><td>Date Reported</td></tr>"
+    html = html & tableRows
+    html = html & "</table>"
+    html = html & "<p>Please advise on how you'd like these discrepancies resolved.</p>"
+    html = html & "</body></html>"
+
+    Dim olApp  As Object
+    Dim olMail As Object
+    Set olApp  = CreateObject("Outlook.Application")
+    Set olMail = olApp.CreateItem(0)
+    With olMail
+        .To      = sciEmails
+        .CC      = "mtl-watson@crl.com"
+        .Subject = "Discrepancy Notification - Protocol# " & protocolName
+        .Display
+        .htmlBody = html & .htmlBody
+    End With
+
+    SaveEmailToStudyFolder olMail, studyNumbers, studyNumberCount, protocolName, srList, _
+        "Generated Discrepancy Emails", "Discrepancy"
+
+    WriteLog "Send Discrepancy Email", "modGlobals", "Protocol: " & protocolName
+    SendOneDiscrepancyEmail = True
+End Function
