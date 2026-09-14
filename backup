@@ -1,0 +1,318 @@
+Step 1 — Backend: tblBackupSettings
+
+Single-row settings table:
+
+Field	Type
+SettingID	Number, Long Integer (always 1)
+ShipmentsPath	Short Text 255
+ShipmentsUpdatePath	Short Text 255
+BackendBackupPath	Short Text 255
+
+Refresh linked table in the frontend.
+
+Step 2 — New module modBackup
+vb
+Option Compare Database
+Option Explicit
+
+' ──────────────────────────────────────────
+'  SETTINGS
+' ──────────────────────────────────────────
+Public Function GetBackupSetting(fieldName As String) As String
+    GetBackupSetting = Nz(DLookup(fieldName, "tblBackupSettings", "SettingID=1"), "")
+End Function
+
+Public Sub SaveBackupSettings(shipmentsPath As String, shipmentsUpdatePath As String, backendBackupPath As String)
+    If DCount("*", "tblBackupSettings", "SettingID=1") = 0 Then
+        CurrentDb.Execute "INSERT INTO tblBackupSettings (SettingID, ShipmentsPath, ShipmentsUpdatePath, BackendBackupPath) VALUES (1, '" & _
+            Replace(shipmentsPath, "'", "''") & "', '" & Replace(shipmentsUpdatePath, "'", "''") & "', '" & _
+            Replace(backendBackupPath, "'", "''") & "')", dbFailOnError
+    Else
+        CurrentDb.Execute "UPDATE tblBackupSettings SET ShipmentsPath='" & Replace(shipmentsPath, "'", "''") & _
+            "', ShipmentsUpdatePath='" & Replace(shipmentsUpdatePath, "'", "''") & _
+            "', BackendBackupPath='" & Replace(backendBackupPath, "'", "''") & "' WHERE SettingID=1", dbFailOnError
+    End If
+End Sub
+
+' ──────────────────────────────────────────
+'  AUTOMATIC MONTHLY SHIPMENTS FILES (admin-only, silent)
+' ──────────────────────────────────────────
+Public Sub CheckMonthlyBackupsIfAdmin()
+    If Not gIsAdmin Then Exit Sub
+    On Error GoTo errHandler
+
+    Dim shipmentsPath As String, updatePath As String
+    shipmentsPath = GetBackupSetting("ShipmentsPath")
+    updatePath = GetBackupSetting("ShipmentsUpdatePath")
+    If shipmentsPath = "" Or updatePath = "" Then Exit Sub
+
+    Dim targetMonth As Date
+    targetMonth = DateAdd("m", -1, Date)
+    Dim monthLabel As String
+    monthLabel = Format(targetMonth, "mmmm") & Format(targetMonth, "yyyy")
+
+    Dim monthKeys(0) As Long
+    monthKeys(0) = Year(targetMonth) * 100 + Month(targetMonth)
+
+    If Day(Date) <= 15 Then
+        Dim fileName1 As String
+        fileName1 = shipmentsPath & "\" & monthLabel & "shipments.xlsx"
+        If Dir(fileName1) = "" Then
+            GenerateShipmentsExcelForMonths monthKeys, 1, fileName1
+            WriteLog "Auto Monthly Backup", "modBackup", "Created: " & fileName1
+        End If
+    Else
+        Dim fileName2 As String
+        fileName2 = updatePath & "\" & monthLabel & "shipments_Update.xlsx"
+        If Dir(fileName2) = "" Then
+            GenerateShipmentsExcelForMonths monthKeys, 1, fileName2
+            WriteLog "Auto Monthly Backup", "modBackup", "Created: " & fileName2
+        End If
+    End If
+    Exit Sub
+errHandler:
+    WriteLog "Auto Monthly Backup ERROR", "modBackup", Err.Description
+End Sub
+
+' ──────────────────────────────────────────
+'  BACKEND WEEKLY BACKUP (admin-only, prompted)
+' ──────────────────────────────────────────
+Public Sub CheckBackendBackupIfAdmin()
+    If Not gIsAdmin Then Exit Sub
+    On Error GoTo errHandler
+
+    Dim backupPath As String
+    backupPath = GetBackupSetting("BackendBackupPath")
+    If backupPath = "" Then Exit Sub
+
+    Dim lastBackupDate As Date
+    lastBackupDate = GetLastBackendBackupDate(backupPath)
+
+    If lastBackupDate = 0 Or DateDiff("d", lastBackupDate, Date) > 7 Then
+        If MsgBox("The last backend backup was more than a week ago." & vbCrLf & _
+                  "Do you want to create a backup now?", vbYesNo + vbQuestion, "Backend Backup") = vbYes Then
+            PerformBackendBackup backupPath
+        End If
+    End If
+    Exit Sub
+errHandler:
+    WriteLog "Backend Backup Check ERROR", "modBackup", Err.Description
+End Sub
+
+Private Function GetLastBackendBackupDate(backupPath As String) As Date
+    GetLastBackendBackupDate = 0
+    Dim fileName As String
+    Dim latestDate As Date
+    latestDate = 0
+    fileName = Dir(backupPath & "\Backend_Backup_*.accdb")
+    Do While fileName <> ""
+        Dim fileDate As Date
+        fileDate = FileDateTime(backupPath & "\" & fileName)
+        If fileDate > latestDate Then latestDate = fileDate
+        fileName = Dir()
+    Loop
+    GetLastBackendBackupDate = latestDate
+End Function
+
+Private Sub PerformBackendBackup(backupPath As String)
+    Dim backendPath As String
+    backendPath = GetBackendFilePath()
+    If backendPath = "" Then
+        MsgBox "Could not determine the backend file location.", vbExclamation
+        Exit Sub
+    End If
+    If Dir(backupPath, vbDirectory) = "" Then
+        MsgBox "Backup location not found: " & backupPath, vbExclamation
+        Exit Sub
+    End If
+
+    Dim destFile As String
+    destFile = backupPath & "\Backend_Backup_" & Format(Date, "yyyy-mm-dd") & ".accdb"
+
+    FileCopy backendPath, destFile
+    WriteLog "Backend Backup", "modBackup", "Backed up to: " & destFile
+    MsgBox "Backend backup created successfully.", vbInformation
+End Sub
+
+Private Function GetBackendFilePath() As String
+    On Error Resume Next
+    Dim td As DAO.TableDef
+    Set td = CurrentDb.TableDefs("tblShipments")
+    Dim connectStr As String
+    connectStr = td.Connect
+    If InStr(connectStr, "DATABASE=") > 0 Then
+        GetBackendFilePath = Mid(connectStr, InStr(connectStr, "DATABASE=") + 9)
+    Else
+        GetBackendFilePath = ""
+    End If
+End Function
+
+' ──────────────────────────────────────────
+'  SHARED EXCEL GENERATION (used by both auto + manual)
+' ──────────────────────────────────────────
+Public Sub GenerateShipmentsExcelForMonths(monthKeys() As Long, monthCount As Long, savePath As String)
+    Dim whereClause As String
+    Dim i As Long
+    For i = 0 To monthCount - 1
+        Dim yr As Long, mo As Long
+        yr = monthKeys(i) \ 100
+        mo = monthKeys(i) Mod 100
+        Dim startDate As Date, endDate As Date
+        startDate = DateSerial(yr, mo, 1)
+        endDate = DateSerial(yr, mo + 1, 1) - 1
+        If whereClause <> "" Then whereClause = whereClause & " OR "
+        whereClause = whereClause & "(sh.DeliveryDate Between #" & Format(startDate, "mm/dd/yyyy") & _
+                      "# And #" & Format(endDate, "mm/dd/yyyy") & "#)"
+    Next i
+
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    Set db = CurrentDb()
+    Set rs = db.OpenRecordset( _
+        "SELECT sh.SR, st.StudyNumber, sh.Waybill, sh.Samples, sh.SplitType, st.Matrix, " & _
+        "cl.ClientName, sh.DeliveryDate, st.SponsorProtocol, st.ClientProtocol " & _
+        "FROM (tblShipments sh INNER JOIN tblStudies st ON sh.StudyID = st.StudyID) " & _
+        "INNER JOIN tblClients cl ON st.ClientID = cl.ClientID " & _
+        "WHERE " & whereClause & " ORDER BY sh.DeliveryDate")
+
+    Dim xlApp As Object, xlWb As Object, xlWs As Object
+    Set xlApp = CreateObject("Excel.Application")
+    xlApp.Visible = False
+    xlApp.DisplayAlerts = False
+    Set xlWb = xlApp.Workbooks.Add
+    Set xlWs = xlWb.Sheets(1)
+
+    Dim headers As Variant
+    headers = Array("SR", "Study Number", "Waybill", "Samples", "Split", "Matrix", _
+                     "Client", "Delivery Date", "Sponsor Protocol", "Client Protocol")
+    Dim c As Long
+    For c = 0 To UBound(headers)
+        xlWs.Cells(1, c + 1).Value = headers(c)
+        xlWs.Cells(1, c + 1).Font.Bold = True
+    Next c
+
+    If Not (rs.BOF And rs.EOF) Then
+        xlWs.Range("A2").CopyFromRecordset rs
+    End If
+    rs.Close
+
+    xlWs.Columns(8).NumberFormat = "dd-mmm-yyyy"
+    xlWs.Columns.AutoFit
+
+    xlWb.SaveAs savePath, 51 ' xlOpenXMLWorkbook
+    xlWb.Close False
+    xlApp.Quit
+    Set xlWs = Nothing: Set xlWb = Nothing: Set xlApp = Nothing
+End Sub
+Step 3 — frmMain — hook the admin checks
+
+Add to Form_Load, after InitialiseUser:
+
+vb
+If gIsAdmin Then
+    CheckMonthlyBackupsIfAdmin
+    CheckBackendBackupIfAdmin
+End If
+Step 4 — frmSettings — add a new tab page
+
+Add a Tab Control page (same additive pattern as the Discrepancies tab on frmStudies), Caption "Backup", containing:
+
+Control	Type
+txtShipmentsPath	Text Box
+cmdBrowseShipmentsPath	Button
+txtShipmentsUpdatePath	Text Box
+cmdBrowseShipmentsUpdatePath	Button
+txtBackendBackupPath	Text Box
+cmdBrowseBackendBackupPath	Button
+cmdSaveBackupSettings	Button
+lstBackupMonths	List Box, Multi Select=Simple
+cmdManualBackup	Button
+
+VBA:
+
+vb
+Private Sub Form_Load()
+    ' ... your existing Form_Load code stays above this ...
+    PopulateBackupMonthsList
+    LoadBackupSettingsFields
+End Sub
+
+Private Sub PopulateBackupMonthsList()
+    Dim rowSrc As String
+    Dim i As Long
+    Dim d As Date
+    For i = 0 To 23
+        d = DateAdd("m", -i, Date)
+        Dim monthKey As Long
+        monthKey = Year(d) * 100 + Month(d)
+        If rowSrc <> "" Then rowSrc = rowSrc & ";"
+        rowSrc = rowSrc & monthKey & ";" & Format(d, "mmmm yyyy")
+    Next i
+    Me.lstBackupMonths.ColumnCount = 2
+    Me.lstBackupMonths.ColumnWidths = "0cm;4cm"
+    Me.lstBackupMonths.RowSourceType = "Value List"
+    Me.lstBackupMonths.RowSource = rowSrc
+End Sub
+
+Private Sub LoadBackupSettingsFields()
+    Me.txtShipmentsPath.Value = GetBackupSetting("ShipmentsPath")
+    Me.txtShipmentsUpdatePath.Value = GetBackupSetting("ShipmentsUpdatePath")
+    Me.txtBackendBackupPath.Value = GetBackupSetting("BackendBackupPath")
+End Sub
+
+Private Sub cmdBrowseShipmentsPath_Click()
+    Dim fd As Object
+    Set fd = Application.FileDialog(4) ' msoFileDialogFolderPicker
+    If fd.Show = -1 Then Me.txtShipmentsPath.Value = fd.SelectedItems(1)
+End Sub
+
+Private Sub cmdBrowseShipmentsUpdatePath_Click()
+    Dim fd As Object
+    Set fd = Application.FileDialog(4)
+    If fd.Show = -1 Then Me.txtShipmentsUpdatePath.Value = fd.SelectedItems(1)
+End Sub
+
+Private Sub cmdBrowseBackendBackupPath_Click()
+    Dim fd As Object
+    Set fd = Application.FileDialog(4)
+    If fd.Show = -1 Then Me.txtBackendBackupPath.Value = fd.SelectedItems(1)
+End Sub
+
+Private Sub cmdSaveBackupSettings_Click()
+    SaveBackupSettings Me.txtShipmentsPath.Value, Me.txtShipmentsUpdatePath.Value, Me.txtBackendBackupPath.Value
+    WriteLog "Save Backup Settings", "frmSettings", ""
+    MsgBox "Backup settings saved.", vbInformation
+End Sub
+
+Private Sub cmdManualBackup_Click()
+    Dim monthKeys() As Long
+    Dim monthCount As Long
+    monthCount = 0
+    ReDim monthKeys(0)
+
+    Dim i As Long
+    For i = 0 To Me.lstBackupMonths.ListCount - 1
+        If Me.lstBackupMonths.Selected(i) Then
+            ReDim Preserve monthKeys(monthCount)
+            monthKeys(monthCount) = CLng(Me.lstBackupMonths.ItemData(i))
+            monthCount = monthCount + 1
+        End If
+    Next i
+
+    If monthCount = 0 Then
+        MsgBox "Please select at least one month.", vbExclamation
+        Exit Sub
+    End If
+
+    Dim fd As Object
+    Set fd = Application.FileDialog(4)
+    If fd.Show <> -1 Then Exit Sub
+
+    Dim savePath As String
+    savePath = fd.SelectedItems(1) & "\Shipments_Backup_" & Format(Now(), "yyyy-mm-dd_hhnnss") & ".xlsx"
+
+    GenerateShipmentsExcelForMonths monthKeys, monthCount, savePath
+
+    WriteLog "Manual Backup", "frmSettings", "Months: " & monthCount & " File: " & savePath
+    MsgBox "Backup file created: " & savePath, vbInformation
+End Sub
